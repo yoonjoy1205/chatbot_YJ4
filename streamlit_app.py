@@ -51,6 +51,7 @@ def render_messages():
 
 def send_to_openai(messages):
     # messages: list of dicts with role/content
+    # First try: new OpenAI client (OpenAI class)
     try:
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -58,60 +59,71 @@ def send_to_openai(messages):
             temperature=0.8,
             max_tokens=800,
         )
-        # New OpenAI client returns choices; extract assistant text robustly
-        assistant_msg = None
+    except AttributeError:
+        # The installed openai package may be an older/newer variant without
+        # the `OpenAI` client's `chat.completions.create` path. Fall back to
+        # legacy `openai.ChatCompletion.create` style.
+        try:
+            import importlib
 
-        # Normalize choices access (works for attribute or dict-like responses)
-        choices = None
-        if hasattr(resp, "choices"):
-            choices = resp.choices
-        elif isinstance(resp, dict):
-            choices = resp.get("choices")
-
-        if choices and len(choices) > 0:
-            choice0 = choices[0]
-
-            # 1) Try choice0.message.content (attribute or dict)
-            msg = None
-            if hasattr(choice0, "message"):
-                msg = choice0.message
-            elif isinstance(choice0, dict):
-                msg = choice0.get("message") or choice0.get("delta")
-
-            if msg is not None:
-                if isinstance(msg, dict):
-                    assistant_msg = msg.get("content")
-                else:
-                    assistant_msg = getattr(msg, "content", None)
-
-            # 2) Fallbacks: choice0.text or choice0.get('text')
-            if not assistant_msg:
-                if hasattr(choice0, "text"):
-                    assistant_msg = getattr(choice0, "text", None)
-                elif isinstance(choice0, dict):
-                    assistant_msg = choice0.get("text")
-
-        # 3) As a last fallback, try top-level fields or string conversion
-        if not assistant_msg:
-            if hasattr(resp, "text"):
-                assistant_msg = getattr(resp, "text", None)
-            elif isinstance(resp, dict):
-                assistant_msg = resp.get("text")
-
-        if assistant_msg is None:
-            assistant_msg = str(resp)
-
-        return assistant_msg
+            legacy_openai = importlib.import_module("openai")
+            legacy_openai.api_key = API_KEY
+            # Legacy API expects messages as list[dict]
+            resp = legacy_openai.ChatCompletion.create(
+                model="gpt-4o-mini",
+                messages=messages,
+            )
+        except Exception as e:
+            return f"(오류) OpenAI 호출 실패(레거시 폴백 시도 중): {e}"
     except Exception as e:
-        return f"(오류) 응답 생성 중 문제가 발생했습니다: {e}"
+        return f"(오류) OpenAI 호출 중 오류 발생: {e}"
+
+    # Normalize choices access and extract assistant text robustly
+    assistant_msg = None
+
+    choices = None
+    if hasattr(resp, "choices"):
+        choices = resp.choices
+    elif isinstance(resp, dict):
+        choices = resp.get("choices")
+
+    if choices and len(choices) > 0:
+        choice0 = choices[0]
+
+        # Try choice0.message.content (attribute or dict)
+        msg = None
+        if hasattr(choice0, "message"):
+            msg = choice0.message
+        elif isinstance(choice0, dict):
+            msg = choice0.get("message") or choice0.get("delta")
+
+        if msg is not None:
+            if isinstance(msg, dict):
+                assistant_msg = msg.get("content")
+            else:
+                assistant_msg = getattr(msg, "content", None)
+
+        # Fallbacks: choice0.text or dict text
+        if not assistant_msg:
+            if hasattr(choice0, "text"):
+                assistant_msg = getattr(choice0, "text", None)
+            elif isinstance(choice0, dict):
+                assistant_msg = choice0.get("text")
+
+    # Top-level fallback
+    if not assistant_msg:
+        if hasattr(resp, "text"):
+            assistant_msg = getattr(resp, "text", None)
+        elif isinstance(resp, dict):
+            assistant_msg = resp.get("text")
+
+    if assistant_msg is None:
+        assistant_msg = str(resp)
+
+    return assistant_msg
 
 
-with st.sidebar:
-    st.header("설정")
-    st.caption("모델: 고정 — gpt-4o-mini")
-    if st.button("대화 초기화(Reset)"):
-        st.session_state.messages = [st.session_state.messages[0]]
-        st.experimental_rerun()
+# 설정 UI 제거: 필요 시 `st.session_state.messages = [st.session_state.messages[0]]`로 초기화하세요.
 
 
 render_messages()
